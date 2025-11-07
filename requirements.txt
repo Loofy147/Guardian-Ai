@@ -1,0 +1,11 @@
+pandas
+transformers
+huggingface_hub
+torch
+scikit-learn
+accelerate
+numpy
+gluonts
+fastapi
+uvicorn
+sqlalchemy

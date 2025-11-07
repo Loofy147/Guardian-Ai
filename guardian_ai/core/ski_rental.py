@@ -7,7 +7,7 @@ class SkiRentalLAA(LearningAugmentedAlgorithm):
     """
 
     def decide(self, current_step, trust_level):
-        # Get prediction
+        # Get prediction from the initialized predictor
         pred_duration, uncertainty = self.predictor.predict()
 
         # Compute threshold
@@ -35,54 +35,28 @@ class SkiRentalLAA(LearningAugmentedAlgorithm):
         # ML-informed threshold
         ml_threshold = pred
 
-        # Blend based on uncertainty
-        if uncertainty > pred * 0.2:  # High uncertainty
-            return (1 - trust) * classical + trust * ml_threshold
-        else:  # Low uncertainty, trust ML more
-            return ml_threshold
+        # Blend with trust parameter
+        return (1 - trust) * classical + trust * ml_threshold
 
     def _compute_algorithm_cost(self, actual_duration, trust_level):
         """
-        Computes the cost of the decision made by the LAA.
+        Computes the cost of the decision made by the LAA based on a given outcome.
+        This method calculates the cost without re-running the decision process.
         """
         pred_duration, uncertainty = self.predictor.predict()
         threshold = self._compute_threshold(pred_duration, uncertainty, trust_level)
 
-        # The algorithm commits if the actual duration exceeds the threshold
         if actual_duration >= threshold:
-            # We decided to commit at the threshold point
-            cost = threshold * self.params['step_cost'] + self.params['commit_cost']
+            # If the actual duration meets or exceeds the threshold, the algorithm
+            # would have committed. The cost is the pay-as-you-go cost up to the
+            # threshold, plus the commit cost.
+            cost = (threshold - 1) * self.params['step_cost'] + self.params['commit_cost']
         else:
-            # We paid as we went for the full duration
+            # If the actual duration is less than the threshold, the algorithm
+            # would have paid as it went for the full duration.
             cost = actual_duration * self.params['step_cost']
 
-        # However, the ski-rental problem implies a single decision point.
-        # Let's refine the logic to reflect the online nature of the problem.
-        # The decision is made at each step.
-        cost = 0
-        committed = False
-        for step in range(1, int(actual_duration) + 1):
-            action, _ = self.decide(step, trust_level)
-            if action == "commit":
-                cost += self.params['commit_cost']
-                committed = True
-                break
-            else:
-                cost += self.params['step_cost']
-
-        if committed:
-            # if we committed, the cost is the pay-as-you-go cost up to that point, plus the commit cost
-            # let's find the point of commitment
-            commit_step = 0
-            for step in range(1, int(actual_duration) + 2):
-                 action, _ = self.decide(step, trust_level)
-                 if action == "commit":
-                     commit_step = step
-                     break
-            cost = (commit_step -1) * self.params['step_cost'] + self.params['commit_cost']
-        else:
-            cost = actual_duration * self.params['step_cost']
-        return min(cost, actual_duration * self.params['step_cost'])
+        return cost
 
 
     def _compute_optimal_cost(self, actual_duration):
