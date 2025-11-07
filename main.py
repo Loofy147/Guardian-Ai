@@ -1,13 +1,34 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 import pandas as pd
 import os
 import uuid
 from sqlalchemy.orm import Session
+from datetime import timedelta
+from typing import Optional
 
 from guardian_ai.core.ski_rental import SkiRentalLAA
+from guardian_ai.auth import (
+    Token,
+    User,
+    get_current_user,
+    create_access_token,
+    verify_password,
+    User,
+    get_current_user,
+    create_access_token,
+    verify_password,
+    get_user,
+    create_user,
+    UserInDB,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+)
 from guardian_ai.predictor.time_series import TimeSeriesPredictor
 from guardian_ai.database import create_db_and_tables, SessionLocal, Problem, Prediction, Decision
+from guardian_ai.worker import long_running_task
+from celery.result import AsyncResult
+import redis
 
 # --- App Initialization ---
 app = FastAPI(
@@ -18,6 +39,10 @@ app = FastAPI(
 
 # --- Environment ---
 HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+# --- Caching ---
+cache = redis.from_url(REDIS_URL)
 
 # --- Database Session ---
 def get_db():
@@ -31,11 +56,19 @@ def get_db():
 @app.on_event("startup")
 async def startup_event():
     """
-    On startup, check for the Hugging Face token and create the database and tables.
+    On startup, create the database and a default user.
     """
-    print("Creating database and tables...")
     create_db_and_tables()
-    print("Database and tables created successfully.")
+    db = SessionLocal()
+    # Create a default user if it doesn't exist
+    if not get_user(db, "guardian_user"):
+        create_user(db, UserInDB(
+            username="guardian_user",
+            email="user@example.com",
+            full_name="Guardian User",
+            hashed_password="secretpassword" # This will be hashed by create_user
+        ))
+    db.close()
 
     if not HUGGING_FACE_TOKEN:
         raise RuntimeError("HUGGING_FACE_TOKEN environment variable not set.")
@@ -46,6 +79,7 @@ class HealthResponse(BaseModel):
 
 class DecisionRequest(BaseModel):
     user_id: uuid.UUID
+    problem_id: Optional[uuid.UUID] = None
     problem_type: str
     historical_data: list[dict]
     problem_params: dict
@@ -83,6 +117,25 @@ class PerformanceResponse(BaseModel):
     metrics: PerformanceMetrics
 
 # --- API Endpoints ---
+@app.post("/token", response_model=Token)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = get_user(db, form_data.username)
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/users/me/", response_model=User)
+async def read_users_me(current_user: User = Depends(get_current_user)):
+    return current_user
+
 @app.get("/health", response_model=HealthResponse)
 def health_check():
     """
@@ -91,7 +144,7 @@ def health_check():
     return {"status": "healthy"}
 
 @app.post("/decide", response_model=DecisionResponse)
-async def make_decision(request: DecisionRequest, db: Session = Depends(get_db)):
+async def make_decision(request: DecisionRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Main endpoint to get a decision from a Learning-Augmented Algorithm.
     """
@@ -117,15 +170,20 @@ async def make_decision(request: DecisionRequest, db: Session = Depends(get_db))
     # Get prediction and uncertainty
     prediction_val, uncertainty_val = predictor.predict()
 
-    # Create a new problem record in the database
-    db_problem = Problem(
-        user_id=request.user_id,
-        problem_type=request.problem_type,
-        config=request.problem_params
-    )
-    db.add(db_problem)
-    db.commit()
-    db.refresh(db_problem)
+    # Find or create the problem
+    if request.problem_id:
+        db_problem = db.query(Problem).filter(Problem.id == request.problem_id).first()
+        if not db_problem:
+            raise HTTPException(status_code=404, detail="Problem not found.")
+    else:
+        db_problem = Problem(
+            user_id=request.user_id,
+            problem_type=request.problem_type,
+            config=request.problem_params
+        )
+        db.add(db_problem)
+        db.commit()
+        db.refresh(db_problem)
 
     # Create a new prediction record
     db_prediction = Prediction(
@@ -165,7 +223,7 @@ async def make_decision(request: DecisionRequest, db: Session = Depends(get_db))
     )
 
 @app.post("/log_outcome", response_model=LogOutcomeResponse)
-async def log_outcome(request: LogOutcomeRequest, db: Session = Depends(get_db)):
+async def log_outcome(request: LogOutcomeRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Logs the actual outcome of a decision, allowing for performance tracking.
     """
@@ -209,11 +267,31 @@ async def log_outcome(request: LogOutcomeRequest, db: Session = Depends(get_db))
         actual_outcome=request.actual_outcome
     )
 
+@app.post("/tasks/long_running")
+async def run_long_task():
+    task = long_running_task.delay(1, 2)
+    return {"task_id": task.id}
+
+@app.get("/tasks/status/{task_id}")
+async def get_task_status(task_id: str):
+    task_result = AsyncResult(task_id)
+    return {
+        "task_id": task_id,
+        "status": task_result.status,
+        "result": task_result.result,
+        "info": task_result.info,
+    }
+
 @app.get("/performance/{problem_id}", response_model=PerformanceResponse)
-async def get_performance(problem_id: uuid.UUID, db: Session = Depends(get_db)):
+async def get_performance(problem_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
-    Retrieves and calculates performance metrics for a given problem.
+    Retrieves and calculates performance metrics for a given problem, with caching.
     """
+    # Check cache first
+    cached_performance = cache.get(f"performance:{problem_id}")
+    if cached_performance:
+        return PerformanceResponse.parse_raw(cached_performance)
+
     problem = db.query(Problem).filter(Problem.id == problem_id).first()
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found.")
@@ -244,11 +322,16 @@ async def get_performance(problem_id: uuid.UUID, db: Session = Depends(get_db)):
         decisions_within_guarantee=decisions_within_guarantee,
     )
 
-    return PerformanceResponse(
+    response = PerformanceResponse(
         problem_id=problem.id,
         problem_type=problem.problem_type,
         metrics=metrics
     )
+
+    # Cache the result for 1 hour
+    cache.set(f"performance:{problem_id}", response.json(), ex=3600)
+
+    return response
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,16 +1,21 @@
 import uuid
-from sqlalchemy import create_engine, Column, String, Float, DateTime, ForeignKey, JSON
+from sqlalchemy import create_engine, Column, String, Float, DateTime, ForeignKey, JSON, Boolean
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from sqlalchemy.dialects.postgresql import UUID
 import datetime
 
-# --- Database Configuration ---
-# For simplicity, we'll use a local SQLite database.
-# To switch to PostgreSQL, change the DATABASE_URL.
-# e.g., "postgresql://user:password@host:port/dbname"
-DATABASE_URL = "sqlite:///./guardian_ai.db"
+import os
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# --- Database Configuration ---
+# Use the DATABASE_URL from the environment, with a fallback to a local SQLite database.
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./guardian_ai.db")
+
+# Adjust create_engine arguments based on the database type
+engine_args = {}
+if DATABASE_URL.startswith("sqlite"):
+    engine_args["connect_args"] = {"check_same_thread": False}
+
+engine = create_engine(DATABASE_URL, **engine_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -61,6 +66,15 @@ class Decision(Base):
 
     problem = relationship("Problem", back_populates="decisions")
     prediction = relationship("Prediction", back_populates="decision")
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    email = Column(String, unique=True, index=True)
+    full_name = Column(String)
+    disabled = Column(Boolean, default=False)
 
 
 # --- Database Initialization ---
