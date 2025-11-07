@@ -35,37 +35,25 @@ class SkiRentalLAA(LearningAugmentedAlgorithm):
         # ML-informed threshold
         ml_threshold = pred
 
-        # Blend based on uncertainty
-        if uncertainty > pred * 0.2:  # High uncertainty
-            return (1 - trust) * classical + trust * ml_threshold
-        else:  # Low uncertainty, trust ML more
-            return ml_threshold
+        # Blend with trust parameter
+        return (1 - trust) * classical + trust * ml_threshold
 
     def _compute_algorithm_cost(self, actual_duration, trust_level):
         """
-        Computes the cost incurred by the LAA's decisions given the actual outcome.
+        Computes the cost of the decision made by the LAA based on a given outcome.
+        This method calculates the cost without re-running the decision process.
         """
-        # The predictor is already initialized with historical data, so we can get a
-        # prediction without passing the data again.
         pred_duration, uncertainty = self.predictor.predict()
-
-        # Determine the decision threshold based on the prediction
         threshold = self._compute_threshold(pred_duration, uncertainty, trust_level)
 
-        # Find the point at which the algorithm would have committed
-        commit_step = -1
-        for step in range(1, int(actual_duration) + 1):
-            if step >= threshold:
-                commit_step = step
-                break
-
-        if commit_step != -1:
-            # The algorithm decided to commit.
-            # The cost is the pay-as-you-go cost up to the commitment point,
-            # plus the flat commit cost.
-            cost = (commit_step - 1) * self.params['step_cost'] + self.params['commit_cost']
+        if actual_duration >= threshold:
+            # If the actual duration meets or exceeds the threshold, the algorithm
+            # would have committed. The cost is the pay-as-you-go cost up to the
+            # threshold, plus the commit cost.
+            cost = (threshold - 1) * self.params['step_cost'] + self.params['commit_cost']
         else:
-            # The algorithm never committed, so it paid the step cost for the full duration.
+            # If the actual duration is less than the threshold, the algorithm
+            # would have paid as it went for the full duration.
             cost = actual_duration * self.params['step_cost']
 
         return cost
