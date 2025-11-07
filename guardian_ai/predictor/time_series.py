@@ -26,7 +26,7 @@ class TimeSeriesPredictor:
         self.prediction_override = prediction_override
         self.uncertainty_override = uncertainty_override
 
-        if not prediction_override:
+        if not prediction_override and token:
             login(token=token)
             self.model = TimeSeriesTransformerForPrediction.from_pretrained(
                 "huggingface/time-series-transformer-finetuned-electricity-hourly"

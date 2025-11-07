@@ -35,8 +35,11 @@ class SkiRentalLAA(LearningAugmentedAlgorithm):
         # ML-informed threshold
         ml_threshold = pred
 
-        # Blend with trust parameter
-        return (1 - trust) * classical + trust * ml_threshold
+        # Blend based on uncertainty
+        if uncertainty > pred * 0.2:  # High uncertainty
+            return (1 - trust) * classical + trust * ml_threshold
+        else:  # Low uncertainty, trust ML more
+            return ml_threshold
 
     def _compute_algorithm_cost(self, actual_duration, trust_level):
         """
