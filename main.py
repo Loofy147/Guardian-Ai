@@ -102,6 +102,8 @@ class LogOutcomeResponse(BaseModel):
     message: str
     decision_id: uuid.UUID
     actual_outcome: float
+    algorithm_cost: float
+    optimal_cost: float
 
 class PerformanceMetrics(BaseModel):
     total_decisions: int
@@ -264,7 +266,9 @@ async def log_outcome(request: LogOutcomeRequest, db: Session = Depends(get_db),
     return LogOutcomeResponse(
         message="Outcome logged and performance calculated successfully.",
         decision_id=request.decision_id,
-        actual_outcome=request.actual_outcome
+        actual_outcome=request.actual_outcome,
+        algorithm_cost=algorithm_cost,
+        optimal_cost=optimal_cost
     )
 
 @app.post("/tasks/long_running")
