@@ -7,7 +7,7 @@ class SkiRentalLAA(LearningAugmentedAlgorithm):
     """
 
     def decide(self, current_step, trust_level):
-        # Get prediction
+        # Get prediction from the initialized predictor
         pred_duration, uncertainty = self.predictor.predict()
 
         # Compute threshold
@@ -44,9 +44,9 @@ class SkiRentalLAA(LearningAugmentedAlgorithm):
     def _compute_algorithm_cost(self, actual_duration, trust_level):
         """
         Computes the cost incurred by the LAA's decisions given the actual outcome.
-        This function does not re-run the simulation; it calculates the cost based
-        on the decision threshold that *would have been* used.
         """
+        # The predictor is already initialized with historical data, so we can get a
+        # prediction without passing the data again.
         pred_duration, uncertainty = self.predictor.predict()
 
         # Determine the decision threshold based on the prediction

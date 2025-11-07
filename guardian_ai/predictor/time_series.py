@@ -1,74 +1,83 @@
 import pandas as pd
 import numpy as np
+import torch
 from huggingface_hub import login
+from transformers import TimeSeriesTransformerForPrediction
+from gluonts.time_feature import time_features_from_frequency_str
 
 class TimeSeriesPredictor:
     """
-    A predictor that simulates using a pre-trained Hugging Face model
-    for time-series forecasting.
+    A predictor that uses a pre-trained Hugging Face model for time-series forecasting.
     """
 
-    def __init__(self, historical_demand: pd.DataFrame, token: str):
+    def __init__(self, token: str, historical_demand: pd.DataFrame, prediction_length: int = 24):
         """
-        Initializes the predictor, logs into Hugging Face Hub, and simulates
-        downloading a pre-trained model.
+        Initializes the predictor, logs into Hugging Face Hub, and downloads a pre-trained model.
 
         Args:
-            historical_demand (pd.DataFrame): DataFrame with 'timestamp' and 'value' columns.
             token (str): The Hugging Face Hub authentication token.
+            historical_demand (pd.DataFrame): DataFrame with 'timestamp' and 'value' columns.
+            prediction_length (int): The number of future time steps to predict.
         """
-        print("Authenticating with Hugging Face Hub...")
         login(token=token)
-        print("Authentication successful.")
 
-        print("Simulating the download of a pre-trained time-series model...")
-        # In a real implementation, you would load a model from the hub here, e.g.:
-        # self.model = TimeSeriesTransformerForPrediction.from_pretrained(
-        #     "huggingface-course/time-series-transformer-finetuned-solar-power"
-        # )
-        # self.preprocessor = ...
-        print("Model simulation complete.")
+        self.model = TimeSeriesTransformerForPrediction.from_pretrained(
+            "huggingface/time-series-transformer-finetuned-electricity-hourly"
+        )
+        self.prediction_length = prediction_length
 
         if not isinstance(historical_demand, pd.DataFrame) or 'value' not in historical_demand.columns:
             raise ValueError("historical_demand must be a pandas DataFrame with a 'value' column.")
-
         self.historical_demand = historical_demand
 
-    def predict(self, window_size: int = 30):
+    def _prepare_input_data(self):
         """
-        Generates a prediction and an uncertainty estimate based on historical data.
-
-        NOTE: This is a simplified prediction logic. A real implementation would involve
-        complex data preprocessing tailored to the specific Hugging Face model and
-        running inference through that model.
-
-        Returns:
-            tuple[float, float]: A tuple containing the predicted value and the
-                                 uncertainty estimate.
+        Prepares the historical data for the Transformer model.
         """
-
         series = self.historical_demand['value'].values
 
-        if len(series) < window_size:
-            # If there's not enough data, use all available data
-            window_data = series
-        else:
-            # Use the most recent data points for the prediction
-            window_data = series[-window_size:]
+        # Normalize the series
+        self.series_mean = np.mean(series)
+        self.series_std = np.std(series)
+        normalized_series = (series - self.series_mean) / self.series_std
 
-        if len(window_data) == 0:
+        # Create time features for hourly frequency
+        freq = "1h"
+        time_feats = time_features_from_frequency_str(freq)
+
+        timestamps = self.historical_demand['timestamp']
+        time_series_features = np.vstack([feat(timestamps) for feat in time_feats])
+
+        return {
+            "past_values": torch.tensor(normalized_series, dtype=torch.float32).unsqueeze(0),
+            "past_time_features": torch.tensor(time_series_features, dtype=torch.float32).unsqueeze(0),
+        }
+
+    def predict(self):
+        """
+        Generates a prediction and an uncertainty estimate based on the historical data
+        provided during initialization.
+
+        Returns:
+            tuple[float, float]: A tuple containing the predicted value (mean of the forecast)
+                                 and the uncertainty estimate (std dev of the forecast).
+        """
+        if self.historical_demand.empty or len(self.historical_demand['value']) == 0:
             return 0, 0
 
-        # --- Simplified Prediction Logic ---
-        # Predict the next value as the mean of the recent window
-        prediction = np.mean(window_data)
+        # Prepare the data for the model
+        model_input = self._prepare_input_data()
 
-        # --- Simplified Uncertainty Quantification ---
-        # Use the standard deviation of the recent window as a proxy for uncertainty
-        uncertainty = np.std(window_data)
+        # Run inference
+        with torch.no_grad():
+            outputs = self.model.generate(**model_input)
 
-        # Ensure uncertainty is not zero to avoid issues in LAA formulas
-        if uncertainty == 0:
-            uncertainty = prediction * 0.1  # Assume 10% uncertainty if data is flat
+        # De-normalize the output
+        forecast_values = outputs.sequences.numpy().squeeze()
+        denormalized_forecast = forecast_values * self.series_std + self.series_mean
+
+        # Use the mean of the forecast as the prediction and the std dev as the uncertainty
+        prediction = np.mean(denormalized_forecast)
+        uncertainty = np.std(denormalized_forecast)
 
         return prediction, uncertainty
