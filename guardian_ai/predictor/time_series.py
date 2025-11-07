@@ -10,20 +10,27 @@ class TimeSeriesPredictor:
     A predictor that uses a pre-trained Hugging Face model for time-series forecasting.
     """
 
-    def __init__(self, token: str, historical_demand: pd.DataFrame, prediction_length: int = 24):
+    def __init__(self, token: str, historical_demand: pd.DataFrame, prediction_length: int = 24,
+                 prediction_override: float = None, uncertainty_override: float = None):
         """
-        Initializes the predictor, logs into Hugging Face Hub, and downloads a pre-trained model.
+        Initializes the predictor. Can either run a live prediction or be instantiated
+        with a past prediction for analysis.
 
         Args:
             token (str): The Hugging Face Hub authentication token.
             historical_demand (pd.DataFrame): DataFrame with 'timestamp' and 'value' columns.
             prediction_length (int): The number of future time steps to predict.
+            prediction_override (float, optional): If provided, overrides the live model prediction.
+            uncertainty_override (float, optional): If provided, overrides the live model uncertainty.
         """
-        login(token=token)
+        self.prediction_override = prediction_override
+        self.uncertainty_override = uncertainty_override
 
-        self.model = TimeSeriesTransformerForPrediction.from_pretrained(
-            "huggingface/time-series-transformer-finetuned-electricity-hourly"
-        )
+        if not prediction_override:
+            login(token=token)
+            self.model = TimeSeriesTransformerForPrediction.from_pretrained(
+                "huggingface/time-series-transformer-finetuned-electricity-hourly"
+            )
         self.prediction_length = prediction_length
 
         if not isinstance(historical_demand, pd.DataFrame) or 'value' not in historical_demand.columns:
@@ -62,6 +69,9 @@ class TimeSeriesPredictor:
             tuple[float, float]: A tuple containing the predicted value (mean of the forecast)
                                  and the uncertainty estimate (std dev of the forecast).
         """
+        if self.prediction_override is not None and self.uncertainty_override is not None:
+            return self.prediction_override, self.uncertainty_override
+
         if self.historical_demand.empty or len(self.historical_demand['value']) == 0:
             return 0, 0
 

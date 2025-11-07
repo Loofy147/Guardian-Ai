@@ -60,6 +60,28 @@ class DecisionResponse(BaseModel):
     problem_id: uuid.UUID
     decision_id: uuid.UUID
 
+class LogOutcomeRequest(BaseModel):
+    decision_id: uuid.UUID
+    actual_outcome: float
+
+class LogOutcomeResponse(BaseModel):
+    message: str
+    decision_id: uuid.UUID
+    actual_outcome: float
+
+class PerformanceMetrics(BaseModel):
+    total_decisions: int
+    total_cost_algorithm: float
+    total_cost_optimal: float
+    total_savings: float
+    average_competitive_ratio: float
+    decisions_within_guarantee: int
+
+class PerformanceResponse(BaseModel):
+    problem_id: uuid.UUID
+    problem_type: str
+    metrics: PerformanceMetrics
+
 # --- API Endpoints ---
 @app.get("/health", response_model=HealthResponse)
 def health_check():
@@ -140,6 +162,92 @@ async def make_decision(request: DecisionRequest, db: Session = Depends(get_db))
         uncertainty=uncertainty_val,
         problem_id=db_problem.id,
         decision_id=db_decision.id,
+    )
+
+@app.post("/log_outcome", response_model=LogOutcomeResponse)
+async def log_outcome(request: LogOutcomeRequest, db: Session = Depends(get_db)):
+    """
+    Logs the actual outcome of a decision, allowing for performance tracking.
+    """
+    db_decision = db.query(Decision).filter(Decision.id == request.decision_id).first()
+    if not db_decision:
+        raise HTTPException(status_code=404, detail="Decision not found.")
+
+    db_problem = db_decision.problem
+    db_prediction = db_decision.prediction
+
+    if not db_problem or not db_prediction:
+        raise HTTPException(status_code=404, detail="Associated problem or prediction not found.")
+
+    # Re-instantiate the predictor with the *original* prediction to ensure
+    # the cost calculation uses the same information the decision was based on.
+    # We pass a dummy historical_demand as it won't be used.
+    dummy_df = pd.DataFrame({'timestamp': [pd.Timestamp.now()], 'value': [0]})
+    predictor = TimeSeriesPredictor(
+        token=HUGGING_FACE_TOKEN,
+        historical_demand=dummy_df,
+        prediction_override=db_prediction.predicted_value,
+        uncertainty_override=db_prediction.uncertainty
+    )
+
+    # Re-instantiate the LAA
+    laa = SkiRentalLAA(predictor=predictor, problem_params=db_problem.config)
+
+    # Calculate costs in hindsight
+    algorithm_cost = laa._compute_algorithm_cost(request.actual_outcome, db_prediction.trust_level)
+    optimal_cost = laa._compute_optimal_cost(request.actual_outcome)
+
+    # Update the decision record with the outcome and costs
+    db_decision.actual_outcome = request.actual_outcome
+    db_decision.cost = algorithm_cost
+    db_decision.optimal_cost = optimal_cost
+    db.commit()
+
+    return LogOutcomeResponse(
+        message="Outcome logged and performance calculated successfully.",
+        decision_id=request.decision_id,
+        actual_outcome=request.actual_outcome
+    )
+
+@app.get("/performance/{problem_id}", response_model=PerformanceResponse)
+async def get_performance(problem_id: uuid.UUID, db: Session = Depends(get_db)):
+    """
+    Retrieves and calculates performance metrics for a given problem.
+    """
+    problem = db.query(Problem).filter(Problem.id == problem_id).first()
+    if not problem:
+        raise HTTPException(status_code=404, detail="Problem not found.")
+
+    decisions = problem.decisions
+    completed_decisions = [d for d in decisions if d.cost is not None and d.optimal_cost is not None]
+
+    if not completed_decisions:
+        raise HTTPException(status_code=404, detail="No completed decisions found for this problem.")
+
+    total_cost_algorithm = sum(d.cost for d in completed_decisions)
+    total_cost_optimal = sum(d.optimal_cost for d in completed_decisions)
+    total_savings = total_cost_optimal - total_cost_algorithm
+
+    competitive_ratios = [(d.cost / d.optimal_cost) if d.optimal_cost > 0 else 1.0 for d in completed_decisions]
+    average_competitive_ratio = sum(competitive_ratios) / len(competitive_ratios)
+
+    # This is a simplified guarantee check. A more robust implementation would store
+    # the guarantee for each decision.
+    decisions_within_guarantee = sum(1 for cr in competitive_ratios if cr <= 2.25) # Using the default guarantee
+
+    metrics = PerformanceMetrics(
+        total_decisions=len(completed_decisions),
+        total_cost_algorithm=total_cost_algorithm,
+        total_cost_optimal=total_cost_optimal,
+        total_savings=total_savings,
+        average_competitive_ratio=average_competitive_ratio,
+        decisions_within_guarantee=decisions_within_guarantee,
+    )
+
+    return PerformanceResponse(
+        problem_id=problem.id,
+        problem_type=problem.problem_type,
+        metrics=metrics
     )
 
 if __name__ == "__main__":
