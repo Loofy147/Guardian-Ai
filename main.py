@@ -153,6 +153,9 @@ async def make_decision(request: DecisionRequest, db: Session = Depends(get_db),
     if request.problem_type != "ski_rental":
         raise HTTPException(status_code=400, detail="Problem type not supported.")
 
+    if not request.historical_data:
+        raise HTTPException(status_code=400, detail="No historical data provided to make a prediction.")
+
     # Convert historical data to a DataFrame
     try:
         historical_df = pd.DataFrame(request.historical_data)
