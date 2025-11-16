@@ -1,3 +1,4 @@
+import math
 from .base import LearningAugmentedAlgorithm
 
 
@@ -49,11 +50,14 @@ class SkiRentalLAA(LearningAugmentedAlgorithm):
         pred_duration, uncertainty = self.predictor.predict()
         threshold = self._compute_threshold(pred_duration, uncertainty, trust_level)
 
-        if actual_duration >= threshold:
-            # If the actual duration meets or exceeds the threshold, the algorithm
-            # would have committed. The cost is the pay-as-you-go cost up to the
-            # threshold, plus the commit cost.
-            cost = (threshold - 1) * self.params['step_cost'] + self.params['commit_cost']
+        # The decision to commit happens at the beginning of the day, so we take
+        # the ceiling of the threshold to find the integer step.
+        commit_step = math.ceil(threshold)
+
+        if actual_duration >= commit_step:
+            # If the actual duration meets or exceeds the commit step, the algorithm
+            # would have paid as you go up to that step, then committed.
+            cost = (commit_step - 1) * self.params['step_cost'] + self.params['commit_cost']
         else:
             # If the actual duration is less than the threshold, the algorithm
             # would have paid as it went for the full duration.

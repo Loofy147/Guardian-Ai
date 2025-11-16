@@ -96,5 +96,25 @@ class TestSkiRentalLAA(unittest.TestCase):
         # Optimal cost is 8 * 10 = 80
         self.assertEqual(cost, 80)
 
+    def test_commit_cost_with_float_threshold(self):
+        """
+        Tests that the algorithm cost is calculated correctly when the threshold
+        is a float. The cost should be based on the ceiling of the threshold.
+        """
+        mock_predictor = TimeSeriesPredictor(
+            token="dummy",
+            historical_demand=self.dummy_df,
+            prediction_override=12,
+            uncertainty_override=5 # High uncertainty to trigger blended threshold
+        )
+        laa = SkiRentalLAA(predictor=mock_predictor, problem_params=self.problem_params)
+        # This will result in a blended threshold of 11.6
+        cost = laa._compute_algorithm_cost(actual_duration=12, trust_level=0.8)
+
+        # The algorithm commits at step ceil(11.6) = 12.
+        # Cost = (12 - 1) * 10 (pay-as-you-go) + 100 (commit) = 110 + 100 = 210
+        self.assertEqual(cost, 210)
+
+
 if __name__ == '__main__':
     unittest.main()
