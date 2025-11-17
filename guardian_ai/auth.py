@@ -39,6 +39,9 @@ class User(BaseModel):
 class UserInDB(User):
     hashed_password: str
 
+class UserCreate(User):
+    password: str
+
 # --- Database Dependency ---
 def get_db():
     db = SessionLocal()
@@ -64,10 +67,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-def create_user(db: Session, user: UserInDB):
+def create_user(db: Session, user: UserCreate):
     db_user = DBUser(
         username=user.username,
-        hashed_password=pwd_context.hash(user.hashed_password),
+        hashed_password=pwd_context.hash(user.password),
         email=user.email,
         full_name=user.full_name,
         disabled=user.disabled

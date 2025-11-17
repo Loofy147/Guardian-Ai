@@ -21,7 +21,7 @@ from guardian_ai.auth import (
     verify_password,
     get_user,
     create_user,
-    UserInDB,
+    UserCreate,
     ACCESS_TOKEN_EXPIRE_MINUTES,
 )
 from guardian_ai.predictor.time_series import TimeSeriesPredictor
@@ -62,11 +62,11 @@ async def startup_event():
     db = SessionLocal()
     # Create a default user if it doesn't exist
     if not get_user(db, "guardian_user"):
-        create_user(db, UserInDB(
+        create_user(db, UserCreate(
             username="guardian_user",
             email="user@example.com",
             full_name="Guardian User",
-            hashed_password="secretpassword" # This will be hashed by create_user
+            password="secretpassword"
         ))
     db.close()
 
@@ -152,6 +152,9 @@ async def make_decision(request: DecisionRequest, db: Session = Depends(get_db),
     """
     if request.problem_type != "ski_rental":
         raise HTTPException(status_code=400, detail="Problem type not supported.")
+
+    if not request.historical_data:
+        raise HTTPException(status_code=400, detail="No historical data provided to make a prediction.")
 
     # Convert historical data to a DataFrame
     try:
