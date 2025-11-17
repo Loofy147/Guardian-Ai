@@ -104,16 +104,16 @@ class TestSkiRentalLAA(unittest.TestCase):
         mock_predictor = TimeSeriesPredictor(
             token="dummy",
             historical_demand=self.dummy_df,
-            prediction_override=12,
+            prediction_override=7, # pred=7 -> threshold=7.6
             uncertainty_override=5 # High uncertainty to trigger blended threshold
         )
         laa = SkiRentalLAA(predictor=mock_predictor, problem_params=self.problem_params)
-        # This will result in a blended threshold of 11.6
+        # classical=10, blended = 0.2*10 + 0.8*7 = 2 + 5.6 = 7.6
         cost = laa._compute_algorithm_cost(actual_duration=12, trust_level=0.8)
 
-        # The algorithm commits at step ceil(11.6) = 12.
-        # Cost = (12 - 1) * 10 (pay-as-you-go) + 100 (commit) = 110 + 100 = 210
-        self.assertEqual(cost, 210)
+        # The algorithm commits at step ceil(7.6) = 8.
+        # Cost = (8 - 1) * 10 (pay-as-you-go) + 100 (commit) = 70 + 100 = 170
+        self.assertEqual(cost, 170)
 
 
 if __name__ == '__main__':

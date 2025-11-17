@@ -140,3 +140,29 @@ def test_log_outcome_and_performance(MockTimeSeriesPredictor, mock_cache):
     assert perf_json["problem_id"] == problem_id
     assert perf_json["metrics"]["total_decisions"] == 1
     assert perf_json["metrics"]["total_cost_optimal"] is not None
+
+def test_decide_endpoint_empty_history():
+    """
+    Tests that the /decide endpoint returns a 400 Bad Request error
+    when the historical_data list is empty, as no prediction can be made.
+    """
+    # Authenticate
+    login_response = client.post("/token", data={"username": "testuser", "password": "testpassword"})
+    assert login_response.status_code == 200
+    token = login_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    request_data = {
+        "user_id": str(uuid.uuid4()),
+        "problem_type": "ski_rental",
+        "historical_data": [],  # Empty history
+        "problem_params": {"commit_cost": 500, "step_cost": 10},
+        "decision_state": {"current_step": 1},
+        "trust_level": 0.8,
+    }
+
+    response = client.post("/decide", json=request_data, headers=headers)
+
+    # The request should be rejected as invalid before attempting a prediction.
+    assert response.status_code == 400
+    assert "no historical data" in response.json()["detail"].lower()
