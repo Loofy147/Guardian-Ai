@@ -34,14 +34,14 @@ def setup_database():
     Base.metadata.create_all(bind=engine)
     db = TestingSessionLocal()
     # Create a test user
-    from guardian_ai.auth import create_user, UserInDB
+    from guardian_ai.auth import create_user, UserCreate
     from guardian_ai.database import User as DBUser
     if not db.query(DBUser).filter(DBUser.username == "testuser").first():
-        create_user(db, UserInDB(
+        create_user(db, UserCreate(
             username="testuser",
             email="test@example.com",
             full_name="Test User",
-            hashed_password="testpassword"
+            password="testpassword"
         ))
     db.close()
     yield
