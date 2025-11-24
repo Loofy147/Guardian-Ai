@@ -1,56 +1,71 @@
 import unittest
-from unittest.mock import MagicMock
 import pandas as pd
 
+"""
+Unit tests for the SkiRentalLAA class.
+"""
 from guardian_ai.core.ski_rental import SkiRentalLAA
 from guardian_ai.predictor.time_series import TimeSeriesPredictor
 
+
 class TestSkiRentalLAA(unittest.TestCase):
+    """Test suite for the Ski-Rental Learning-Augmented Algorithm."""
+
     def setUp(self):
-        self.problem_params = {'commit_cost': 100, 'step_cost': 10}
-        self.dummy_df = pd.DataFrame({'timestamp': [pd.Timestamp.now()], 'value': [0]})
+        """Set up common parameters for the tests."""
+        self.problem_params = {"commit_cost": 100, "step_cost": 10}
+        self.dummy_df = pd.DataFrame(
+            {"timestamp": [pd.Timestamp.now()], "value": [0]}
+        )
 
     def test_decide_commit(self):
+        """Test that the algorithm decides to 'commit' when the prediction is high."""
         # Mock a predictor that returns a high prediction
         mock_predictor = TimeSeriesPredictor(
-            token="dummy",
             historical_demand=self.dummy_df,
             prediction_override=15,
-            uncertainty_override=1
+            uncertainty_override=1,
         )
         laa = SkiRentalLAA(predictor=mock_predictor, problem_params=self.problem_params)
         action, _ = laa.decide(current_step=15, trust_level=0.8)
         self.assertEqual(action, "commit")
 
     def test_decide_pay_as_you_go(self):
+        """
+        Test that the algorithm decides to 'pay_as_you_go' when the prediction is low.
+        """
         # Mock a predictor that returns a low prediction
         mock_predictor = TimeSeriesPredictor(
-            token="dummy",
             historical_demand=self.dummy_df,
             prediction_override=5,
-            uncertainty_override=1
+            uncertainty_override=1,
         )
         laa = SkiRentalLAA(predictor=mock_predictor, problem_params=self.problem_params)
         action, _ = laa.decide(current_step=4, trust_level=0.8)
         self.assertEqual(action, "pay_as_you_go")
 
     def test_compute_threshold_low_uncertainty(self):
+        """
+        Test that the threshold equals the prediction when uncertainty is low.
+        """
         mock_predictor = TimeSeriesPredictor(
-            token="dummy",
             historical_demand=self.dummy_df,
             prediction_override=12,
-            uncertainty_override=1
+            uncertainty_override=1,
         )
         laa = SkiRentalLAA(predictor=mock_predictor, problem_params=self.problem_params)
         threshold = laa._compute_threshold(pred=12, uncertainty=1, trust=0.8)
         self.assertEqual(threshold, 12)
 
     def test_compute_threshold_high_uncertainty(self):
+        """
+        Test that the threshold is a blend of the classical and ML-informed
+        thresholds when uncertainty is high.
+        """
         mock_predictor = TimeSeriesPredictor(
-            token="dummy",
             historical_demand=self.dummy_df,
             prediction_override=12,
-            uncertainty_override=5
+            uncertainty_override=5,
         )
         laa = SkiRentalLAA(predictor=mock_predictor, problem_params=self.problem_params)
         threshold = laa._compute_threshold(pred=12, uncertainty=5, trust=0.8)
@@ -59,11 +74,11 @@ class TestSkiRentalLAA(unittest.TestCase):
         self.assertAlmostEqual(threshold, 11.6, places=1)
 
     def test_compute_algorithm_cost_commit(self):
+        """Test the algorithm cost calculation when the decision is to commit."""
         mock_predictor = TimeSeriesPredictor(
-            token="dummy",
             historical_demand=self.dummy_df,
-            prediction_override=15, # High prediction, leads to commit
-            uncertainty_override=1
+            prediction_override=15,  # High prediction, leads to commit
+            uncertainty_override=1,
         )
         laa = SkiRentalLAA(predictor=mock_predictor, problem_params=self.problem_params)
         # Threshold will be 15
@@ -72,11 +87,13 @@ class TestSkiRentalLAA(unittest.TestCase):
         self.assertEqual(cost, 240)
 
     def test_compute_algorithm_cost_pay_as_you_go(self):
+        """
+        Test the algorithm cost calculation when the decision is to pay as you go.
+        """
         mock_predictor = TimeSeriesPredictor(
-            token="dummy",
             historical_demand=self.dummy_df,
-            prediction_override=5, # Low prediction, leads to pay_as_you_go
-            uncertainty_override=1
+            prediction_override=5,  # Low prediction, leads to pay_as_you_go
+            uncertainty_override=1,
         )
         laa = SkiRentalLAA(predictor=mock_predictor, problem_params=self.problem_params)
         # Threshold will be 5
@@ -85,12 +102,18 @@ class TestSkiRentalLAA(unittest.TestCase):
         self.assertEqual(cost, 40)
 
     def test_compute_optimal_cost_commit(self):
+        """
+        Test that the optimal cost is the commit cost when it's cheaper.
+        """
         laa = SkiRentalLAA(predictor=None, problem_params=self.problem_params)
         cost = laa._compute_optimal_cost(actual_duration=12)
         # Optimal cost is commit_cost = 100
         self.assertEqual(cost, 100)
 
     def test_compute_optimal_cost_pay_as_you_go(self):
+        """
+        Test that the optimal cost is the pay-as-you-go cost when it's cheaper.
+        """
         laa = SkiRentalLAA(predictor=None, problem_params=self.problem_params)
         cost = laa._compute_optimal_cost(actual_duration=8)
         # Optimal cost is 8 * 10 = 80
@@ -102,10 +125,9 @@ class TestSkiRentalLAA(unittest.TestCase):
         is a float. The cost should be based on the ceiling of the threshold.
         """
         mock_predictor = TimeSeriesPredictor(
-            token="dummy",
             historical_demand=self.dummy_df,
-            prediction_override=7, # pred=7 -> threshold=7.6
-            uncertainty_override=5 # High uncertainty to trigger blended threshold
+            prediction_override=7,  # pred=7 -> threshold=7.6
+            uncertainty_override=5,  # High uncertainty to trigger blended threshold
         )
         laa = SkiRentalLAA(predictor=mock_predictor, problem_params=self.problem_params)
         # classical=10, blended = 0.2*10 + 0.8*7 = 2 + 5.6 = 7.6
