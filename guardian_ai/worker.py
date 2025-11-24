@@ -1,5 +1,9 @@
+"""
+This module defines Celery tasks for background processing.
+"""
 import time
 from guardian_ai.celery_utils import celery_app
+
 
 @celery_app.task(bind=True)
 def long_running_task(self, x, y):

@@ -1,74 +1,95 @@
+"""
+End-to-end tests for the Guardian AI FastAPI application.
+"""
+import os
+import uuid
+from unittest.mock import patch
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-import uuid
-import os
-from unittest.mock import patch
+
+from guardian_ai.database import Base
+from main import app, get_db
 
 # --- Test Setup ---
 # Override the database URL for testing
 TEST_DATABASE_URL = "sqlite:///./test.db"
-os.environ['DATABASE_URL'] = TEST_DATABASE_URL
-
-from main import app, get_db
-from guardian_ai.database import Base
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 # Create a new database engine for testing
 engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+TESTING_SESSION_LOCAL = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 
 # Override the get_db dependency to use the test database
 def override_get_db():
+    """Overrides the get_db dependency to use the test database."""
     try:
-        db = TestingSessionLocal()
+        db = TESTING_SESSION_LOCAL()
         yield db
     finally:
         db.close()
 
+
 app.dependency_overrides[get_db] = override_get_db
+
 
 @pytest.fixture(scope="function", autouse=True)
 def setup_database():
+    """Sets up the database for each test function."""
     # Create the tables
     Base.metadata.create_all(bind=engine)
-    db = TestingSessionLocal()
+    db = TESTING_SESSION_LOCAL()
     # Create a test user
     from guardian_ai.auth import create_user, UserCreate
     from guardian_ai.database import User as DBUser
+
     if not db.query(DBUser).filter(DBUser.username == "testuser").first():
-        create_user(db, UserCreate(
-            username="testuser",
-            email="test@example.com",
-            full_name="Test User",
-            password="testpassword"
-        ))
+        create_user(
+            db,
+            UserCreate(
+                username="testuser",
+                email="test@example.com",
+                full_name="Test User",
+                password="testpassword",
+            ),
+        )
     db.close()
     yield
     # Teardown: drop all tables
     Base.metadata.drop_all(bind=engine)
 
+
 # --- Mock Hugging Face Token ---
 # Set a dummy token for testing purposes
-os.environ['HUGGING_FACE_TOKEN'] = "hf_test_token"
+os.environ["HUGGING_FACE_TOKEN"] = "hf_test_token"
 
 client = TestClient(app)
 
+
 # --- Test Cases ---
 
+
 def test_health_check():
+    """Tests the /health endpoint."""
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "healthy"}
 
-@patch('main.TimeSeriesPredictor')
-def test_decide_endpoint(MockTimeSeriesPredictor):
+
+@patch("main.TimeSeriesPredictor.from_token")
+def test_decide_endpoint(mock_from_token):
+    """Tests the /decide endpoint."""
     # Mock the predictor
-    mock_predictor_instance = MockTimeSeriesPredictor.return_value
+    mock_predictor_instance = mock_from_token.return_value
     mock_predictor_instance.predict.return_value = (720, 50)
 
     # Authenticate
-    login_response = client.post("/token", data={"username": "testuser", "password": "testpassword"})
+    login_response = client.post(
+        "/token", data={"username": "testuser", "password": "testpassword"}
+    )
     assert login_response.status_code == 200
     token = login_response.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -94,43 +115,58 @@ def test_decide_endpoint(MockTimeSeriesPredictor):
     assert "problem_id" in response_json
     assert "decision_id" in response_json
 
-@patch('main.cache')
-@patch('main.TimeSeriesPredictor')
-def test_log_outcome_and_performance(MockTimeSeriesPredictor, mock_cache):
-    # Mock the predictor and cache
-    mock_predictor_instance = MockTimeSeriesPredictor.return_value
-    mock_predictor_instance.predict.return_value = (720, 50)
+
+@patch("main.cache")
+@patch("main.TimeSeriesPredictor")
+def test_log_outcome_and_performance(mock_time_series_predictor, mock_cache):
+    """Tests the /log_outcome and /performance endpoints."""
+    # Mock the cache
     mock_cache.get.return_value = None
 
     # Authenticate
-    login_response = client.post("/token", data={"username": "testuser", "password": "testpassword"})
+    login_response = client.post(
+        "/token", data={"username": "testuser", "password": "testpassword"}
+    )
     token = login_response.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     # First, make a decision
-    user_id = str(uuid.uuid4())
-    request_data = {
-        "user_id": user_id,
-        "problem_type": "ski_rental",
-        "historical_data": [{"timestamp": "2023-01-01T00:00:00Z", "value": 100}],
-        "problem_params": {"commit_cost": 500, "step_cost": 10},
-        "decision_state": {"current_step": 1},
-        "trust_level": 0.8,
-    }
-    decide_response = client.post("/decide", json=request_data, headers=headers)
+    with patch("main.TimeSeriesPredictor.from_token") as mock_from_token:
+        mock_predictor_instance = mock_from_token.return_value
+        mock_predictor_instance.predict.return_value = (720, 50)
+
+        user_id = str(uuid.uuid4())
+        request_data = {
+            "user_id": user_id,
+            "problem_type": "ski_rental",
+            "historical_data": [{"timestamp": "2023-01-01T00:00:00Z", "value": 100}],
+            "problem_params": {"commit_cost": 500, "step_cost": 10},
+            "decision_state": {"current_step": 1},
+            "trust_level": 0.8,
+        }
+        decide_response = client.post("/decide", json=request_data, headers=headers)
 
     decision_id = decide_response.json()["decision_id"]
     problem_id = decide_response.json()["problem_id"]
 
     # Now, log an outcome for that decision
-    log_outcome_data = {
-        "decision_id": decision_id,
-        "actual_outcome": 60, # 60 hours
-    }
-    log_response = client.post("/log_outcome", json=log_outcome_data, headers=headers)
+    with patch("main.TimeSeriesPredictor") as mock_time_series_predictor:
+        mock_predictor_instance = mock_time_series_predictor.return_value
+        mock_predictor_instance.predict.return_value = (720, 50)
+
+        log_outcome_data = {
+            "decision_id": decision_id,
+            "actual_outcome": 60,  # 60 hours
+        }
+        log_response = client.post(
+            "/log_outcome", json=log_outcome_data, headers=headers
+        )
 
     assert log_response.status_code == 200
-    assert log_response.json()["message"] == "Outcome logged and performance calculated successfully."
+    assert (
+        log_response.json()["message"]
+        == "Outcome logged and performance calculated successfully."
+    )
 
     # Finally, check the performance
     perf_response = client.get(f"/performance/{problem_id}", headers=headers)

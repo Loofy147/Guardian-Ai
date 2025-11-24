@@ -22,6 +22,24 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install pylint pip-audit
+        cd frontend && npm ci && cd ..
+
+    - name: Lint Python code
+      run: |
+        pylint guardian_ai tests
+
+    - name: Lint JavaScript code
+      run: |
+        cd frontend && ./node_modules/.bin/eslint src/
+
+    - name: Audit Python dependencies
+      run: |
+        pip-audit
+
+    - name: Audit Node.js dependencies
+      run: |
+        cd frontend && npm audit
 
     - name: Run tests
       run: |

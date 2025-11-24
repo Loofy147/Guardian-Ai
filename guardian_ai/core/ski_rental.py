@@ -1,3 +1,6 @@
+"""
+This module implements the Learning-Augmented Ski Rental algorithm.
+"""
 import math
 from .base import LearningAugmentedAlgorithm
 
@@ -39,8 +42,8 @@ class SkiRentalLAA(LearningAugmentedAlgorithm):
         # Blend based on uncertainty
         if uncertainty > pred * 0.2:  # High uncertainty
             return (1 - trust) * classical + trust * ml_threshold
-        else:  # Low uncertainty, trust ML more
-            return ml_threshold
+        # Low uncertainty, trust ML more
+        return ml_threshold
 
     def _compute_algorithm_cost(self, actual_duration, trust_level):
         """

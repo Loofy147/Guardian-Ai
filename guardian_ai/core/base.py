@@ -1,3 +1,8 @@
+"""
+This module defines the base class for Learning-Augmented Algorithms (LAAs).
+"""
+
+
 class LearningAugmentedAlgorithm:
     """
     Base class for all LAAs.

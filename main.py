@@ -10,25 +10,28 @@ from typing import Optional
 
 from guardian_ai.core.ski_rental import SkiRentalLAA
 from guardian_ai.auth import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
     Token,
     User,
-    get_current_user,
-    create_access_token,
-    verify_password,
-    User,
-    get_current_user,
-    create_access_token,
-    verify_password,
-    get_user,
-    create_user,
     UserCreate,
-    ACCESS_TOKEN_EXPIRE_MINUTES,
+    create_access_token,
+    create_user,
+    get_current_user,
+    get_user,
+    verify_password,
 )
-from guardian_ai.predictor.time_series import TimeSeriesPredictor
-from guardian_ai.database import create_db_and_tables, SessionLocal, Problem, Prediction, Decision
-from guardian_ai.worker import long_running_task
-from celery.result import AsyncResult
+from guardian_ai.database import (
+    SESSION_LOCAL,
+    Problem,
+    Prediction,
+    Decision,
+    create_db_and_tables,
+)
 import redis
+from celery.result import AsyncResult
+
+from guardian_ai.predictor.time_series import TimeSeriesPredictor
+from guardian_ai.worker import long_running_task
 
 # --- App Initialization ---
 app = FastAPI(
@@ -44,13 +47,15 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 # --- Caching ---
 cache = redis.from_url(REDIS_URL)
 
+
 # --- Database Session ---
 def get_db():
-    db = SessionLocal()
+    db = SESSION_LOCAL()
     try:
         yield db
     finally:
         db.close()
+
 
 # --- Startup Event ---
 @app.on_event("startup")
@@ -59,7 +64,7 @@ async def startup_event():
     On startup, create the database and a default user.
     """
     create_db_and_tables()
-    db = SessionLocal()
+    db = SESSION_LOCAL()
     # Create a default user if it doesn't exist
     if not get_user(db, "guardian_user"):
         create_user(db, UserCreate(
@@ -165,12 +170,13 @@ async def make_decision(request: DecisionRequest, db: Session = Depends(get_db),
 
     # Initialize the predictor
     try:
-        predictor = TimeSeriesPredictor(
-            token=HUGGING_FACE_TOKEN,
-            historical_demand=historical_df
+        predictor = TimeSeriesPredictor.from_token(
+            token=HUGGING_FACE_TOKEN, historical_demand=historical_df
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error initializing predictor: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error initializing predictor: {e}"
+        )
 
     # Get prediction and uncertainty
     prediction_val, uncertainty_val = predictor.predict()
@@ -245,12 +251,11 @@ async def log_outcome(request: LogOutcomeRequest, db: Session = Depends(get_db),
     # Re-instantiate the predictor with the *original* prediction to ensure
     # the cost calculation uses the same information the decision was based on.
     # We pass a dummy historical_demand as it won't be used.
-    dummy_df = pd.DataFrame({'timestamp': [pd.Timestamp.now()], 'value': [0]})
+    dummy_df = pd.DataFrame({"timestamp": [pd.Timestamp.now()], "value": [0]})
     predictor = TimeSeriesPredictor(
-        token=HUGGING_FACE_TOKEN,
         historical_demand=dummy_df,
         prediction_override=db_prediction.predicted_value,
-        uncertainty_override=db_prediction.uncertainty
+        uncertainty_override=db_prediction.uncertainty,
     )
 
     # Re-instantiate the LAA

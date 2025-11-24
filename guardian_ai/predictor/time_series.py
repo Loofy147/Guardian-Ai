@@ -1,3 +1,6 @@
+"""
+This module defines the TimeSeriesPredictor class for making predictions.
+"""
 import pandas as pd
 import numpy as np
 import torch
@@ -5,43 +8,61 @@ from huggingface_hub import login
 from transformers import TimeSeriesTransformerForPrediction
 from gluonts.time_feature import time_features_from_frequency_str
 
+
 class TimeSeriesPredictor:
     """
     A predictor that uses a pre-trained Hugging Face model for time-series forecasting.
     """
 
-    def __init__(self, token: str, historical_demand: pd.DataFrame, prediction_length: int = 24,
-                 prediction_override: float = None, uncertainty_override: float = None):
+    def __init__(
+        self,
+        historical_demand: pd.DataFrame,
+        prediction_length: int = 24,
+        prediction_override: float = None,
+        uncertainty_override: float = None,
+    ):
         """
         Initializes the predictor. Can either run a live prediction or be instantiated
         with a past prediction for analysis.
-
-        Args:
-            token (str): The Hugging Face Hub authentication token.
-            historical_demand (pd.DataFrame): DataFrame with 'timestamp' and 'value' columns.
-            prediction_length (int): The number of future time steps to predict.
-            prediction_override (float, optional): If provided, overrides the live model prediction.
-            uncertainty_override (float, optional): If provided, overrides the live model uncertainty.
         """
         self.prediction_override = prediction_override
         self.uncertainty_override = uncertainty_override
-
-        if not prediction_override and token:
-            login(token=token)
-            self.model = TimeSeriesTransformerForPrediction.from_pretrained(
-                "huggingface/time-series-transformer-finetuned-electricity-hourly"
-            )
+        self.series_mean = 0
+        self.series_std = 1
+        self.model = None  # Initialize model as None
         self.prediction_length = prediction_length
 
-        if not isinstance(historical_demand, pd.DataFrame) or 'value' not in historical_demand.columns:
-            raise ValueError("historical_demand must be a pandas DataFrame with a 'value' column.")
+        if (
+            not isinstance(historical_demand, pd.DataFrame)
+            or "value" not in historical_demand.columns
+        ):
+            raise ValueError(
+                "historical_demand must be a pandas DataFrame with a 'value' column."
+            )
         self.historical_demand = historical_demand
+
+    @classmethod
+    def from_token(
+        cls,
+        token: str,
+        historical_demand: pd.DataFrame,
+        prediction_length: int = 24,
+    ):
+        """
+        Creates a TimeSeriesPredictor instance and logs into Hugging Face.
+        """
+        predictor = cls(historical_demand, prediction_length)
+        login(token=token)
+        predictor.model = TimeSeriesTransformerForPrediction.from_pretrained(
+            "huggingface/time-series-transformer-finetuned-electricity-hourly"
+        )
+        return predictor
 
     def _prepare_input_data(self):
         """
         Prepares the historical data for the Transformer model.
         """
-        series = self.historical_demand['value'].values
+        series = self.historical_demand["value"].values
 
         # Normalize the series
         self.series_mean = np.mean(series)
