@@ -5,7 +5,7 @@ import pandas as pd
 import os
 import uuid
 from sqlalchemy.orm import Session
-from datetime import timedelta
+from datetime import timedelta, datetime
 from typing import Optional
 
 from guardian_ai.core.ski_rental import SkiRentalLAA
@@ -28,17 +28,57 @@ from guardian_ai.database import (
     create_db_and_tables,
 )
 import redis
+from contextlib import asynccontextmanager
 from celery.result import AsyncResult
 
 from guardian_ai.predictor.time_series import TimeSeriesPredictor
 from guardian_ai.worker import long_running_task
+from guardian_ai.logging import configure_logging
+
+configure_logging()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    On startup, create the database and a default user.
+    """
+    print("Startup event")
+    create_db_and_tables()
+    db = SESSION_LOCAL()
+    # Create a default user if it doesn't exist
+    if not get_user(db, "guardian_user"):
+        create_user(
+            db,
+            UserCreate(
+                username="guardian_user",
+                email="user@example.com",
+                full_name="Guardian User",
+                password="secretpassword",
+            ),
+        )
+    db.close()
+
+    if not HUGGING_FACE_TOKEN:
+        raise RuntimeError("HUGGING_FACE_TOKEN environment variable not set.")
+    yield
+    print("Shutdown event")
+
+
+from prometheus_fastapi_instrumentator import Instrumentator
+
+from guardian_ai.tracing import configure_tracing
 
 # --- App Initialization ---
 app = FastAPI(
     title="Guardian AI",
     description="A decision support platform for online optimization problems.",
     version="0.1.0",
+    lifespan=lifespan,
 )
+
+Instrumentator().instrument(app).expose(app)
+configure_tracing(app)
 
 # --- Environment ---
 HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
@@ -57,26 +97,6 @@ def get_db():
         db.close()
 
 
-# --- Startup Event ---
-@app.on_event("startup")
-async def startup_event():
-    """
-    On startup, create the database and a default user.
-    """
-    create_db_and_tables()
-    db = SESSION_LOCAL()
-    # Create a default user if it doesn't exist
-    if not get_user(db, "guardian_user"):
-        create_user(db, UserCreate(
-            username="guardian_user",
-            email="user@example.com",
-            full_name="Guardian User",
-            password="secretpassword"
-        ))
-    db.close()
-
-    if not HUGGING_FACE_TOKEN:
-        raise RuntimeError("HUGGING_FACE_TOKEN environment variable not set.")
 
 # --- API Models ---
 class HealthResponse(BaseModel):
@@ -123,6 +143,16 @@ class PerformanceResponse(BaseModel):
     problem_type: str
     metrics: PerformanceMetrics
 
+class ProblemResponse(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    problem_type: str
+    config: dict
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
 # --- API Endpoints ---
 @app.post("/token", response_model=Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -149,6 +179,14 @@ def health_check():
     Health check endpoint to confirm the service is running.
     """
     return {"status": "healthy"}
+
+
+@app.get("/problems", response_model=list[ProblemResponse])
+async def get_problems(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Retrieves all problems for the current user.
+    """
+    return db.query(Problem).filter(Problem.user_id == current_user.id).all()
 
 @app.post("/decide", response_model=DecisionResponse)
 async def make_decision(request: DecisionRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -190,7 +228,7 @@ async def make_decision(request: DecisionRequest, db: Session = Depends(get_db),
         db_problem = Problem(
             user_id=request.user_id,
             problem_type=request.problem_type,
-            config=request.problem_params
+            config=request.problem_params,
         )
         db.add(db_problem)
         db.commit()
@@ -262,7 +300,9 @@ async def log_outcome(request: LogOutcomeRequest, db: Session = Depends(get_db),
     laa = SkiRentalLAA(predictor=predictor, problem_params=db_problem.config)
 
     # Calculate costs in hindsight
-    algorithm_cost = laa._compute_algorithm_cost(request.actual_outcome, db_prediction.trust_level)
+    algorithm_cost = laa._compute_algorithm_cost(
+        request.actual_outcome, db_prediction.trust_level
+    )
     optimal_cost = laa._compute_optimal_cost(request.actual_outcome)
 
     # Update the decision record with the outcome and costs
@@ -341,7 +381,7 @@ async def get_performance(problem_id: uuid.UUID, db: Session = Depends(get_db), 
     )
 
     # Cache the result for 1 hour
-    cache.set(f"performance:{problem_id}", response.json(), ex=3600)
+    cache.set(f"performance:{problem_id}", response.model_dump_json(), ex=3600)
 
     return response
 

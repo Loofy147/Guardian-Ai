@@ -45,7 +45,7 @@ class Problem(Base):
     )  # In a real app, this would be a foreign key to a User table
     problem_type = Column(String(50), nullable=False)
     config = Column(JSON, nullable=False)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
     decisions = relationship("Decision", back_populates="problem")
     historical_data = relationship("HistoricalData", back_populates="problem")
@@ -70,7 +70,7 @@ class Prediction(Base):
     __tablename__ = "predictions"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     problem_id = Column(UUID(as_uuid=True), ForeignKey("problems.id"), nullable=False)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
     predicted_value = Column(Float, nullable=False)
     uncertainty = Column(Float, nullable=False)
     trust_level = Column(Float, nullable=False)
@@ -87,7 +87,7 @@ class Decision(Base):
     prediction_id = Column(
         UUID(as_uuid=True), ForeignKey("predictions.id"), nullable=True
     )
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
     action = Column(String(50), nullable=False)
     actual_outcome = Column(Float, nullable=True)
     cost = Column(Float, nullable=True)
